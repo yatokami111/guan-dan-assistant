@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">掼蛋辅助</string>
+    <string name="accessibility_service_label">掼蛋辅助悬浮提示</string>
+    <string name="accessibility_service_description">用于在游戏页面上展示识牌、记牌和出牌建议。</string>
+</resources>

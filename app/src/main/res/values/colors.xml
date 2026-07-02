@@ -1,0 +1,5 @@
+<resources>
+    <color name="overlay_bg">#EE111827</color>
+    <color name="overlay_text">#FFFFFFFF</color>
+    <color name="accent">#FF16A34A</color>
+</resources>
