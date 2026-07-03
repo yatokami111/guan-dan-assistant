@@ -16,6 +16,7 @@ import android.media.projection.MediaProjection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.DisplayMetrics;
@@ -32,15 +33,18 @@ public final class ScreenCaptureService extends Service {
     private static final String EXTRA_RESULT_CODE = "result_code";
     private static final String EXTRA_DATA = "data";
     private static final String EXTRA_CONTINUOUS = "continuous";
-    private static final long FRAME_INTERVAL_MS = 250L;
+    private static final long FRAME_INTERVAL_MS = 1000L;
 
     private MediaProjection projection;
     private ImageReader imageReader;
     private VirtualDisplay virtualDisplay;
     private boolean continuous;
     private boolean processedSingleFrame;
+    private boolean processingFrame;
     private long lastProcessMs;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private HandlerThread workerThread;
+    private Handler workerHandler;
     private CardRecognizer recognizer;
 
     public static void start(Context context, int resultCode, Intent data, boolean continuous) {
@@ -56,6 +60,14 @@ public final class ScreenCaptureService extends Service {
         Intent intent = new Intent(context, ScreenCaptureService.class);
         intent.setAction(ACTION_STOP);
         context.startService(intent);
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        workerThread = new HandlerThread("guan-dan-recognizer");
+        workerThread.start();
+        workerHandler = new Handler(workerThread.getLooper());
     }
 
     @Override
@@ -84,8 +96,8 @@ public final class ScreenCaptureService extends Service {
             return START_NOT_STICKY;
         }
         projection.registerCallback(new MediaProjection.Callback() {
-            @Override public void onStop() { cleanup(); }
-        }, handler);
+            @Override public void onStop() { cleanup(false); }
+        }, workerHandler);
         AssistantStore.setWatching(continuous);
         sendState();
         startCapture();
@@ -95,7 +107,12 @@ public final class ScreenCaptureService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        cleanup();
+        cleanup(true);
+        if (workerThread != null) {
+            workerThread.quitSafely();
+            workerThread = null;
+            workerHandler = null;
+        }
         AssistantStore.setWatching(false);
         sendState();
     }
@@ -119,7 +136,7 @@ public final class ScreenCaptureService extends Service {
             public void onImageAvailable(ImageReader reader) {
                 handleImage(reader);
             }
-        }, handler);
+        }, workerHandler);
         virtualDisplay = projection.createVirtualDisplay(
                 "guan-dan-capture",
                 metrics.widthPixels,
@@ -128,7 +145,7 @@ public final class ScreenCaptureService extends Service {
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                 imageReader.getSurface(),
                 null,
-                handler);
+                workerHandler);
         handler.postDelayed(new Runnable() {
             @Override public void run() {
                 if (!continuous && !processedSingleFrame) finish("取帧超时，请重新授权录屏");
@@ -142,12 +159,22 @@ public final class ScreenCaptureService extends Service {
         try {
             long now = System.currentTimeMillis();
             if (continuous && now - lastProcessMs < FRAME_INTERVAL_MS) return;
-            lastProcessMs = now;
-            processedSingleFrame = true;
-            Bitmap bitmap = imageToBitmap(image);
-            CardRecognizer.RecognitionResult result = recognizer.recognize(bitmap);
-            AssistantStore.applyRecognition(result);
-            sendScan();
+            if (processingFrame) return;
+            processingFrame = true;
+            try {
+                lastProcessMs = now;
+                processedSingleFrame = true;
+                Bitmap bitmap = imageToBitmap(image);
+                try {
+                    CardRecognizer.RecognitionResult result = recognizer.recognize(bitmap);
+                    AssistantStore.applyRecognition(result);
+                    sendScan();
+                } finally {
+                    bitmap.recycle();
+                }
+            } finally {
+                processingFrame = false;
+            }
             if (!continuous) stopSelf();
         } finally {
             image.close();
@@ -162,7 +189,9 @@ public final class ScreenCaptureService extends Service {
         int rowPadding = rowStride - pixelStride * image.getWidth();
         Bitmap padded = Bitmap.createBitmap(image.getWidth() + rowPadding / pixelStride, image.getHeight(), Bitmap.Config.ARGB_8888);
         padded.copyPixelsFromBuffer(buffer);
-        return Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
+        Bitmap cropped = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
+        padded.recycle();
+        return cropped;
     }
 
     private void finish(String message) {
@@ -171,7 +200,7 @@ public final class ScreenCaptureService extends Service {
         stopSelf();
     }
 
-    private void cleanup() {
+    private void cleanup(boolean stopProjection) {
         if (virtualDisplay != null) {
             virtualDisplay.release();
             virtualDisplay = null;
@@ -181,8 +210,9 @@ public final class ScreenCaptureService extends Service {
             imageReader = null;
         }
         if (projection != null) {
-            projection.stop();
+            MediaProjection oldProjection = projection;
             projection = null;
+            if (stopProjection) oldProjection.stop();
         }
     }
 

@@ -66,7 +66,10 @@ public final class OverlayService extends Service {
     }
 
     private void show() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) stopSelf();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            stopSelf();
+            return;
+        }
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -75,7 +78,8 @@ public final class OverlayService extends Service {
 
         textView = new TextView(this);
         textView.setTextColor(getColor(R.color.overlay_text));
-        textView.setTextSize(13);
+        textView.setTextSize(12);
+        textView.setMaxWidth((int) (320 * getResources().getDisplayMetrics().density));
         panel.addView(textView);
 
         LinearLayout row = new LinearLayout(this);
@@ -136,14 +140,20 @@ public final class OverlayService extends Service {
     private void render() {
         if (textView == null) return;
         StrategyAdvisor.Advice advice = AssistantStore.advice();
-        String content = "掼蛋辅助  打" + AssistantStore.levelRank()
+        String content = "掼蛋辅助  " + AssistantStore.levelSummary()
                 + (AssistantStore.isWatching() ? "  实时识别中" : "  未识别")
                 + "\n手牌 " + AssistantStore.hand().size() + " 张"
-                + "\n建议 " + advice.primary
+                + "\n建议 " + compact(advice.primary, 42)
                 + "\n已出 " + AssistantStore.playedText()
-                + "\n余牌 " + AssistantStore.remainingText()
-                + "\n状态 " + AssistantStore.lastScanMessage();
+                + "\n余牌 " + compact(AssistantStore.remainingText(), 64)
+                + "\n状态 " + compact(AssistantStore.lastScanMessage(), 54);
         textView.setText(content);
+    }
+
+    private String compact(String value, int maxLength) {
+        if (value == null) return "";
+        if (value.length() <= maxLength) return value;
+        return value.substring(0, Math.max(0, maxLength - 1)) + "…";
     }
 
     private Button smallButton(String label) {

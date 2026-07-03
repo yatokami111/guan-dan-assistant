@@ -20,8 +20,9 @@ public final class CardRecognizer {
     public static final int SOURCE_HAND = 1;
     public static final int SOURCE_TABLE_PLAY = 2;
 
-    private static final float SCALE = 0.25f;
-    private static final int SEARCH_STEP = 4;
+    private static final float SCALE = 0.20f;
+    private static final int SEARCH_STEP = 8;
+    private static final int MAX_FOREGROUND_POINTS = 160;
     private static final float LEVEL_MAX_DIFF = 0.22f;
     private static final float CARD_MAX_DIFF = 0.20f;
 
@@ -34,11 +35,12 @@ public final class CardRecognizer {
     }
 
     public RecognitionResult recognize(Bitmap bitmap) {
+        long startedAt = System.currentTimeMillis();
         if (bitmap == null) {
-            return new RecognitionResult("未拿到屏幕帧", null, new ArrayList<Card>(), SOURCE_UNKNOWN, 0f);
+            return new RecognitionResult("未拿到屏幕帧", null, null, new ArrayList<Card>(), SOURCE_UNKNOWN, 0f);
         }
         if (levelTemplates.isEmpty() && cardTemplates.isEmpty()) {
-            return new RecognitionResult("实时视觉识别中，但模板库为空", null, new ArrayList<Card>(), SOURCE_UNKNOWN, 0f);
+            return new RecognitionResult("实时视觉识别中，但模板库为空", null, null, new ArrayList<Card>(), SOURCE_UNKNOWN, 0f);
         }
 
         Bitmap small = Bitmap.createScaledBitmap(
@@ -46,43 +48,44 @@ public final class CardRecognizer {
                 Math.max(1, Math.round(bitmap.getWidth() * SCALE)),
                 Math.max(1, Math.round(bitmap.getHeight() * SCALE)),
                 false);
-        String level = matchLevel(small);
-        List<CardMatch> tableMatches = matchCardsInRegions(small, tableRegions(small.getWidth(), small.getHeight()));
-        List<CardMatch> handMatches = matchCardsInRegions(small, handRegions(small.getWidth(), small.getHeight()));
+        try {
+            LevelPair levels = matchLevels(small);
+            List<CardMatch> tableMatches = matchCardsInRegions(small, tableRegions(small.getWidth(), small.getHeight()));
+            long elapsed = System.currentTimeMillis() - startedAt;
 
-        if (!tableMatches.isEmpty()) {
-            List<Card> cards = toCards(tableMatches);
-            return new RecognitionResult(
-                    "实时视觉识别中，桌面区域识别到 " + labels(cards),
-                    level,
-                    cards,
-                    SOURCE_TABLE_PLAY,
-                    confidence(tableMatches));
+            if (!tableMatches.isEmpty()) {
+                List<Card> cards = toCards(tableMatches);
+                return new RecognitionResult(
+                        "检测耗时" + elapsed + "ms，" + levels.describe() + "，桌面区域识别到 " + labels(cards),
+                        levels.own,
+                        levels.opponent,
+                        cards,
+                        SOURCE_TABLE_PLAY,
+                        confidence(tableMatches));
+            }
+            String message = "检测耗时" + elapsed + "ms，" + levels.describe()
+                    + "，桌面区域未匹配到新牌。";
+            return new RecognitionResult(message, levels.own, levels.opponent, new ArrayList<Card>(), SOURCE_UNKNOWN, 0.15f);
+        } finally {
+            small.recycle();
         }
-        if (!handMatches.isEmpty()) {
-            List<Card> cards = toCards(handMatches);
-            return new RecognitionResult(
-                    "实时视觉识别中，手牌区域识别到 " + cards.size() + " 张：" + labels(cards),
-                    level,
-                    cards,
-                    SOURCE_HAND,
-                    confidence(handMatches));
-        }
-        String message = "实时视觉识别中 " + bitmap.getWidth() + "x" + bitmap.getHeight()
-                + "，未匹配到当前模板库中的牌面。可继续补充更多小程序截图提升覆盖。";
-        return new RecognitionResult(message, level, new ArrayList<Card>(), SOURCE_UNKNOWN, 0.15f);
     }
 
-    private String matchLevel(Bitmap small) {
+    private LevelPair matchLevels(Bitmap small) {
+        String own = matchLevelAt(small, rect(small.getWidth(), small.getHeight(), 0.070f, 0.010f, 0.108f, 0.075f));
+        String opponent = matchLevelAt(small, rect(small.getWidth(), small.getHeight(), 0.070f, 0.074f, 0.108f, 0.132f));
+        return new LevelPair(own, opponent);
+    }
+
+    private String matchLevelAt(Bitmap small, Rect levelRect) {
         if (levelTemplates.isEmpty()) return null;
-        Rect ownLevel = rect(small.getWidth(), small.getHeight(), 0.070f, 0.010f, 0.108f, 0.075f);
         Match best = null;
         for (Template template : levelTemplates) {
-            Bitmap scaled = template.scaled(Math.max(1, ownLevel.width()), Math.max(1, ownLevel.height()));
-            float diff = diff(small, scaled, ownLevel.left, ownLevel.top);
-            if (best == null || diff < best.diff) best = new Match(template.name, diff, ownLevel.left, ownLevel.top);
+            Bitmap scaled = template.scaled(Math.max(1, levelRect.width()), Math.max(1, levelRect.height()));
+            float diff = diff(small, scaled, levelRect.left, levelRect.top);
+            if (best == null || diff < best.diff) best = new Match(template.name, diff, levelRect.left, levelRect.top);
         }
-        if (best != null && best.diff <= LEVEL_MAX_DIFF) return best.name;
+        if (best != null && best.diff <= LEVEL_MAX_DIFF) return rankName(best.name);
         return null;
     }
 
@@ -103,7 +106,7 @@ public final class CardRecognizer {
             Match best = null;
             for (int y = region.top; y <= region.bottom - th; y += SEARCH_STEP) {
                 for (int x = region.left; x <= region.right - tw; x += SEARCH_STEP) {
-                    float d = diff(small, template.small, x, y);
+                    float d = diffTemplate(small, template, x, y);
                     if (best == null || d < best.diff) best = new Match(template.name, d, x, y);
                 }
             }
@@ -162,6 +165,21 @@ public final class CardRecognizer {
         return count < 30 ? 1f : sum / (255f * count);
     }
 
+    private float diffTemplate(Bitmap source, Template template, int left, int top) {
+        if (template.fgCount < 10) return 1f;
+        long sum = 0;
+        for (int i = 0; i < template.fgCount; i++) {
+            int sp = source.getPixel(left + template.fgX[i], top + template.fgY[i]);
+            int sr = (sp >> 16) & 0xff;
+            int sg = (sp >> 8) & 0xff;
+            int sb = sp & 0xff;
+            sum += Math.abs(sr - template.fgR[i])
+                    + Math.abs(sg - template.fgG[i])
+                    + Math.abs(sb - template.fgB[i]);
+        }
+        return sum / (255f * template.fgCount * 3f);
+    }
+
     private boolean isForeground(int r, int g, int b) {
         int avg = (r + g + b) / 3;
         boolean neutralLight = Math.abs(r - g) < 8 && Math.abs(g - b) < 8 && avg > 180;
@@ -193,6 +211,11 @@ public final class CardRecognizer {
 
     private int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private String rankName(String templateName) {
+        int index = templateName.indexOf('_');
+        return index < 0 ? templateName : templateName.substring(0, index);
     }
 
     private void loadTemplates(AssetManager assets, String path, List<Template> target) {
@@ -238,16 +261,36 @@ public final class CardRecognizer {
     public static final class RecognitionResult {
         public final String message;
         public final String levelRank;
+        public final String ownLevelRank;
+        public final String opponentLevelRank;
         public final List<Card> cards;
         public final int source;
         public final float confidence;
 
-        public RecognitionResult(String message, String levelRank, List<Card> cards, int source, float confidence) {
+        public RecognitionResult(String message, String ownLevelRank, String opponentLevelRank, List<Card> cards, int source, float confidence) {
             this.message = message;
-            this.levelRank = levelRank;
+            this.levelRank = ownLevelRank;
+            this.ownLevelRank = ownLevelRank;
+            this.opponentLevelRank = opponentLevelRank;
             this.cards = cards;
             this.source = source;
             this.confidence = confidence;
+        }
+    }
+
+    private static final class LevelPair {
+        final String own;
+        final String opponent;
+
+        LevelPair(String own, String opponent) {
+            this.own = own;
+            this.opponent = opponent;
+        }
+
+        String describe() {
+            String ownText = own == null ? "?" : own;
+            String opponentText = opponent == null ? "?" : opponent;
+            return "己方打" + ownText + " / 对方打" + opponentText;
         }
     }
 
@@ -256,6 +299,12 @@ public final class CardRecognizer {
         final Bitmap original;
         final Bitmap small;
         final Card card;
+        final int[] fgX;
+        final int[] fgY;
+        final int[] fgR;
+        final int[] fgG;
+        final int[] fgB;
+        final int fgCount;
         private final Map<String, Bitmap> scaledCache = new HashMap<>();
 
         Template(String name, Bitmap original) {
@@ -267,6 +316,13 @@ public final class CardRecognizer {
                     Math.max(1, Math.round(original.getHeight() * SCALE)),
                     false);
             this.card = parseCard(name);
+            Foreground foreground = foregroundOf(this.small);
+            this.fgX = foreground.x;
+            this.fgY = foreground.y;
+            this.fgR = foreground.r;
+            this.fgG = foreground.g;
+            this.fgB = foreground.b;
+            this.fgCount = foreground.count;
         }
 
         Bitmap scaled(int width, int height) {
@@ -284,6 +340,65 @@ public final class CardRecognizer {
             String[] parts = name.split("_");
             if (parts.length < 2) return new Card("", name);
             return new Card(parts[0], parts[1]);
+        }
+
+        private static Foreground foregroundOf(Bitmap bitmap) {
+            List<Integer> xs = new ArrayList<>();
+            List<Integer> ys = new ArrayList<>();
+            List<Integer> rs = new ArrayList<>();
+            List<Integer> gs = new ArrayList<>();
+            List<Integer> bs = new ArrayList<>();
+            for (int y = 0; y < bitmap.getHeight(); y++) {
+                for (int x = 0; x < bitmap.getWidth(); x++) {
+                    int pixel = bitmap.getPixel(x, y);
+                    int r = (pixel >> 16) & 0xff;
+                    int g = (pixel >> 8) & 0xff;
+                    int b = pixel & 0xff;
+                    int avg = (r + g + b) / 3;
+                    boolean neutralLight = Math.abs(r - g) < 8 && Math.abs(g - b) < 8 && avg > 180;
+                    if (avg >= 215 || neutralLight) continue;
+                    xs.add(x);
+                    ys.add(y);
+                    rs.add(r);
+                    gs.add(g);
+                    bs.add(b);
+                }
+            }
+            return new Foreground(sample(xs), sample(ys), sample(rs), sample(gs), sample(bs));
+        }
+
+        private static int[] toArray(List<Integer> values) {
+            int[] result = new int[values.size()];
+            for (int i = 0; i < values.size(); i++) result[i] = values.get(i);
+            return result;
+        }
+
+        private static int[] sample(List<Integer> values) {
+            if (values.size() <= MAX_FOREGROUND_POINTS) return toArray(values);
+            int[] result = new int[MAX_FOREGROUND_POINTS];
+            for (int i = 0; i < MAX_FOREGROUND_POINTS; i++) {
+                int index = Math.min(values.size() - 1, Math.round(i * (values.size() - 1f) / (MAX_FOREGROUND_POINTS - 1f)));
+                result[i] = values.get(index);
+            }
+            return result;
+        }
+    }
+
+    private static final class Foreground {
+        final int[] x;
+        final int[] y;
+        final int[] r;
+        final int[] g;
+        final int[] b;
+        final int count;
+
+        Foreground(int[] x, int[] y, int[] r, int[] g, int[] b) {
+            this.x = x;
+            this.y = y;
+            this.r = r;
+            this.g = g;
+            this.b = b;
+            this.count = x.length;
         }
     }
 

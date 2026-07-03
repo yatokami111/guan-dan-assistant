@@ -15,7 +15,6 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -26,17 +25,14 @@ import com.privatetransform.guandanassistant.overlay.OverlayService;
 
 public final class MainActivity extends Activity {
     private static final int REQ_CAPTURE = 2001;
-    private EditText levelInput;
-    private EditText handInput;
-    private EditText lastPlayInput;
-    private EditText playedInput;
+
     private TextView resultView;
-    private boolean pendingContinuousCapture = false;
+    private boolean pendingAutoStart;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            renderAdvice();
+            renderStatus();
         }
     };
 
@@ -47,7 +43,18 @@ public final class MainActivity extends Activity {
         registerLocal(receiver, new IntentFilter(AssistantStore.ACTION_STATE_CHANGED));
         registerLocal(receiver, new IntentFilter(AssistantStore.ACTION_SCAN_RESULT));
         requestNotificationsIfNeeded();
-        renderAdvice();
+        renderStatus();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (pendingAutoStart && canDrawOverlay()) {
+            pendingAutoStart = false;
+            beginRecognitionWithOverlay();
+        } else {
+            renderStatus();
+        }
     }
 
     @Override
@@ -59,129 +66,90 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_CAPTURE && resultCode == RESULT_OK && data != null) {
-            ScreenCaptureService.start(this, resultCode, data, pendingContinuousCapture);
-            Toast.makeText(this, pendingContinuousCapture ? "已启动实时视觉记牌" : "已启动单帧识别", Toast.LENGTH_SHORT).show();
-            pendingContinuousCapture = false;
+        if (requestCode != REQ_CAPTURE) return;
+        if (resultCode == RESULT_OK && data != null) {
+            ScreenCaptureService.start(this, resultCode, data, true);
+            Toast.makeText(this, "已开始自动识别", Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "未获得录屏权限，无法自动识别", Toast.LENGTH_SHORT).show();
         }
+        renderStatus();
     }
 
     private void buildUi() {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 32, 32, 32);
+        root.setPadding(32, 36, 32, 32);
         scroll.addView(root);
 
-        TextView title = text("掼蛋辅助", 24, true);
-        root.addView(title);
-        root.addView(text("打开悬浮窗后点“开始实时识牌”，授权录屏，再切回微信/小程序游戏。工具会悬浮在上方，实时分析屏幕帧并更新记牌状态。", 14, false));
+        root.addView(text("掼蛋辅助", 26, true));
+        root.addView(text("点开始后会自动打开悬浮层并请求录屏权限，随后切回微信小程序即可实时识别牌面、记录已出牌和估算余牌。", 15, false));
 
-        levelInput = input("当前打几，例如 2、5、A");
-        levelInput.setText(AssistantStore.levelRank());
-        root.addView(label("级牌"));
-        root.addView(levelInput);
+        Button start = fullButton("开始自动识别", new View.OnClickListener() {
+            @Override public void onClick(View v) { startAutoRecognition(); }
+        });
+        root.addView(start);
 
-        handInput = input("手牌，例如 H5 S5 C5 D5 BJ SJ A K Q");
-        handInput.setMinLines(3);
-        handInput.setText(AssistantStore.handText());
-        root.addView(label("我的手牌"));
-        root.addView(handInput);
-
-        lastPlayInput = input("上家/当前要压的牌，可留空表示首出");
-        lastPlayInput.setText(AssistantStore.lastPlayText());
-        root.addView(label("当前要压的牌"));
-        root.addView(lastPlayInput);
-
-        playedInput = input("本轮新增已出牌，点“记入已出”后累计");
-        root.addView(label("记牌输入"));
-        root.addView(playedInput);
-
-        LinearLayout row1 = row();
-        row1.addView(button("分析建议", new View.OnClickListener() {
-            @Override public void onClick(View v) { saveInputs(); renderAdvice(); notifyState(); }
-        }));
-        row1.addView(button("记入已出", new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                saveInputs();
-                AssistantStore.addPlayedFromText(playedInput.getText().toString());
-                playedInput.setText("");
-                renderAdvice();
-                notifyState();
-            }
-        }));
-        root.addView(row1);
-
-        LinearLayout row2 = row();
-        row2.addView(button("打开悬浮窗", new View.OnClickListener() {
-            @Override public void onClick(View v) { openOverlay(); }
-        }));
-        row2.addView(button("开始实时识牌", new View.OnClickListener() {
-            @Override public void onClick(View v) { requestCapture(true); }
-        }));
-        root.addView(row2);
-
-        LinearLayout row3 = row();
-        row3.addView(button("单帧识别", new View.OnClickListener() {
-            @Override public void onClick(View v) { requestCapture(false); }
-        }));
-        row3.addView(button("停止识别", new View.OnClickListener() {
+        LinearLayout row = row();
+        row.addView(button("停止识别", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 ScreenCaptureService.stop(MainActivity.this);
                 AssistantStore.setWatching(false);
-                renderAdvice();
                 notifyState();
+                renderStatus();
             }
         }));
-        root.addView(row3);
-
-        LinearLayout row4 = row();
-        row4.addView(button("重置记牌", new View.OnClickListener() {
+        row.addView(button("重置记牌", new View.OnClickListener() {
             @Override public void onClick(View v) {
                 AssistantStore.resetMemory();
-                renderAdvice();
                 notifyState();
+                renderStatus();
             }
         }));
-        row4.addView(button("无障碍设置", new View.OnClickListener() {
-            @Override public void onClick(View v) { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
-        }));
-        root.addView(row4);
+        root.addView(row);
 
         resultView = text("", 15, false);
-        resultView.setPadding(0, 24, 0, 0);
+        resultView.setPadding(0, 28, 0, 0);
         root.addView(resultView);
         setContentView(scroll);
     }
 
-    private void saveInputs() {
-        AssistantStore.setLevelRank(levelInput.getText().toString());
-        AssistantStore.setHandFromText(handInput.getText().toString());
-        AssistantStore.setLastPlayFromText(lastPlayInput.getText().toString());
-    }
-
-    private void renderAdvice() {
-        saveInputs();
-        StrategyAdvisorAdviceText text = new StrategyAdvisorAdviceText();
-        resultView.setText(text.render());
-    }
-
-    private void openOverlay() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+    private void startAutoRecognition() {
+        if (!canDrawOverlay()) {
+            pendingAutoStart = true;
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
             startActivity(intent);
-            Toast.makeText(this, "请先允许悬浮窗权限", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "请先允许悬浮窗权限，返回后会继续启动识别", Toast.LENGTH_LONG).show();
             return;
         }
-        saveInputs();
-        startService(new Intent(this, OverlayService.class));
-        notifyState();
+        beginRecognitionWithOverlay();
     }
 
-    private void requestCapture(boolean continuous) {
-        pendingContinuousCapture = continuous;
+    private void beginRecognitionWithOverlay() {
+        startService(new Intent(this, OverlayService.class));
+        notifyState();
         MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-        if (manager != null) startActivityForResult(manager.createScreenCaptureIntent(), REQ_CAPTURE);
+        if (manager == null) {
+            Toast.makeText(this, "系统不支持录屏识别", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startActivityForResult(manager.createScreenCaptureIntent(), REQ_CAPTURE);
+    }
+
+    private boolean canDrawOverlay() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this);
+    }
+
+    private void renderStatus() {
+        if (resultView == null) return;
+        com.privatetransform.guandanassistant.engine.StrategyAdvisor.Advice advice = AssistantStore.advice();
+        resultView.setText("识别状态\n" + (AssistantStore.isWatching() ? "自动识别中" : "未开始")
+                + "\n\n双方级数\n" + AssistantStore.levelSummary()
+                + "\n\n建议\n" + advice.primary
+                + "\n\n已出牌\n" + AssistantStore.playedText()
+                + "\n\n外面余牌估计\n" + AssistantStore.remainingText()
+                + "\n\n识图状态\n" + AssistantStore.lastScanMessage());
     }
 
     private void notifyState() {
@@ -211,19 +179,6 @@ public final class MainActivity extends Activity {
         return view;
     }
 
-    private TextView label(String value) {
-        TextView view = text(value, 14, true);
-        view.setPadding(0, 18, 0, 4);
-        return view;
-    }
-
-    private EditText input(String hint) {
-        EditText view = new EditText(this);
-        view.setHint(hint);
-        view.setSingleLine(false);
-        return view;
-    }
-
     private LinearLayout row() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -236,6 +191,7 @@ public final class MainActivity extends Activity {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
+        button.setTextSize(16);
         button.setOnClickListener(listener);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
         params.setMargins(0, 0, 12, 0);
@@ -243,16 +199,17 @@ public final class MainActivity extends Activity {
         return button;
     }
 
-    private static final class StrategyAdvisorAdviceText {
-        String render() {
-            com.privatetransform.guandanassistant.engine.StrategyAdvisor.Advice advice = AssistantStore.advice();
-            return "建议\n" + advice.primary
-                    + "\n\n识别状态\n" + (AssistantStore.isWatching() ? "实时视觉识别中" : "未实时识别")
-                    + "\n\n当前打几\n" + AssistantStore.levelRank()
-                    + "\n\n要压牌型\n" + advice.targetType
-                    + "\n\n已出牌\n" + AssistantStore.playedText()
-                    + "\n\n外面余牌估计\n" + AssistantStore.remainingText()
-                    + "\n\n识图状态\n" + AssistantStore.lastScanMessage();
-        }
+    private Button fullButton(String label, View.OnClickListener listener) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(18);
+        button.setOnClickListener(listener);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.setMargins(0, 24, 0, 0);
+        button.setLayoutParams(params);
+        return button;
     }
 }

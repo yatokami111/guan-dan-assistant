@@ -15,13 +15,15 @@ public final class AssistantStore {
     public static final String EXTRA_TEXT = "text";
 
     private static String levelRank = "2";
+    private static String opponentLevelRank = "?";
     private static List<Card> hand = new ArrayList<>();
     private static List<Card> lastPlay = new ArrayList<>();
     private static final CardMemory memory = new CardMemory();
     private static String lastScanMessage = "尚未开始实时视觉识别";
     private static boolean watching = false;
     private static String lastTableSignature = "";
-    private static long lastTableUpdateMs = 0L;
+    private static int scanCount = 0;
+    private static int changeCount = 0;
 
     private AssistantStore() {}
 
@@ -29,8 +31,20 @@ public final class AssistantStore {
         levelRank = rank == null || rank.trim().isEmpty() ? "2" : rank.trim().toUpperCase().replace("T", "10");
     }
 
+    public static synchronized void setOpponentLevelRank(String rank) {
+        opponentLevelRank = rank == null || rank.trim().isEmpty() ? "?" : rank.trim().toUpperCase().replace("T", "10");
+    }
+
     public static synchronized String levelRank() {
         return levelRank;
+    }
+
+    public static synchronized String opponentLevelRank() {
+        return opponentLevelRank;
+    }
+
+    public static synchronized String levelSummary() {
+        return "己方 " + levelRank + " / 对方 " + opponentLevelRank;
     }
 
     public static synchronized void setHandFromText(String text) {
@@ -49,7 +63,8 @@ public final class AssistantStore {
         memory.reset();
         lastPlay.clear();
         lastTableSignature = "";
-        lastTableUpdateMs = 0L;
+        scanCount = 0;
+        changeCount = 0;
     }
 
     public static synchronized List<Card> hand() {
@@ -65,7 +80,7 @@ public final class AssistantStore {
     }
 
     public static synchronized String playedText() {
-        return memory.summarizePlayed();
+        return "已记录" + memory.playedCount() + "张  " + memory.summarizePlayed();
     }
 
     public static synchronized String remainingText() {
@@ -92,9 +107,13 @@ public final class AssistantStore {
 
     public static synchronized void applyRecognition(CardRecognizer.RecognitionResult result) {
         if (result == null) return;
-        lastScanMessage = result.message;
-        if (result.levelRank != null && !result.levelRank.trim().isEmpty()) {
-            setLevelRank(result.levelRank);
+        scanCount++;
+        lastScanMessage = "第" + scanCount + "次检测：" + result.message;
+        if (result.ownLevelRank != null && !result.ownLevelRank.trim().isEmpty()) {
+            setLevelRank(result.ownLevelRank);
+        }
+        if (result.opponentLevelRank != null && !result.opponentLevelRank.trim().isEmpty()) {
+            setOpponentLevelRank(result.opponentLevelRank);
         }
         if (result.cards == null || result.cards.isEmpty()) return;
         if (result.source == CardRecognizer.SOURCE_HAND) {
@@ -103,12 +122,12 @@ public final class AssistantStore {
         }
         if (result.source == CardRecognizer.SOURCE_TABLE_PLAY) {
             String signature = signature(result.cards);
-            long now = System.currentTimeMillis();
-            if (!signature.equals(lastTableSignature) || now - lastTableUpdateMs > 3500L) {
+            if (!signature.equals(lastTableSignature)) {
                 lastPlay = new ArrayList<>(result.cards);
                 memory.addPlayed(result.cards);
                 lastTableSignature = signature;
-                lastTableUpdateMs = now;
+                changeCount++;
+                lastScanMessage = "第" + scanCount + "次检测：桌面牌变化" + changeCount + "次，已记入 " + StrategyAdvisor.labels(result.cards);
             }
         }
     }
