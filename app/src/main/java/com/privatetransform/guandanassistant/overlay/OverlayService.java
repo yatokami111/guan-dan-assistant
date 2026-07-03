@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
 import android.os.Build;
 import android.os.IBinder;
 import android.provider.Settings;
@@ -18,9 +19,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.privatetransform.guandanassistant.AssistantStore;
-import com.privatetransform.guandanassistant.MainActivity;
 import com.privatetransform.guandanassistant.R;
-import com.privatetransform.guandanassistant.engine.StrategyAdvisor;
 
 public final class OverlayService extends Service {
     private WindowManager windowManager;
@@ -72,46 +71,40 @@ public final class OverlayService extends Service {
         }
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(18, 14, 18, 14);
-        panel.setBackgroundColor(getColor(R.color.overlay_bg));
+        panel.setOrientation(LinearLayout.HORIZONTAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(dp(10), dp(5), dp(8), dp(5));
+        panel.setBackgroundResource(R.drawable.overlay_bar_bg);
 
         textView = new TextView(this);
         textView.setTextColor(getColor(R.color.overlay_text));
-        textView.setTextSize(12);
-        textView.setMaxWidth((int) (320 * getResources().getDisplayMetrics().density));
-        panel.addView(textView);
+        textView.setTextSize(10);
+        textView.setTypeface(Typeface.DEFAULT_BOLD);
+        textView.setIncludeFontPadding(false);
+        textView.setMaxWidth(getResources().getDisplayMetrics().widthPixels);
+        panel.addView(textView, new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1));
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        Button open = smallButton("编辑");
-        open.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                Intent intent = new Intent(OverlayService.this, MainActivity.class);
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent);
-            }
-        });
-        Button close = smallButton("关闭");
+        Button close = smallButton("×");
         close.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { stopSelf(); }
         });
-        row.addView(open);
-        row.addView(close);
-        panel.addView(row);
+        panel.addView(close);
 
         int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 type,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 30;
-        params.y = 160;
+        params.x = 0;
+        params.y = 0;
         root = panel;
         root.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -139,29 +132,35 @@ public final class OverlayService extends Service {
 
     private void render() {
         if (textView == null) return;
-        StrategyAdvisor.Advice advice = AssistantStore.advice();
-        String content = "掼蛋辅助  " + AssistantStore.levelSummary()
-                + (AssistantStore.isWatching() ? "  实时识别中" : "  未识别")
-                + "\n手牌 " + AssistantStore.hand().size() + " 张"
-                + "\n建议 " + compact(advice.primary, 42)
-                + "\n已出 " + AssistantStore.playedText()
-                + "\n余牌 " + compact(AssistantStore.remainingText(), 64)
-                + "\n状态 " + compact(AssistantStore.lastScanMessage(), 54);
+        String content = "记牌器  " + AssistantStore.levelSummary()
+                + (AssistantStore.isWatching() ? "  · 识别中" : "  · 未识别")
+                + "\n" + compact(AssistantStore.remainingText(), 132);
         textView.setText(content);
     }
 
     private String compact(String value, int maxLength) {
         if (value == null) return "";
         if (value.length() <= maxLength) return value;
-        return value.substring(0, Math.max(0, maxLength - 1)) + "…";
+        return value.substring(0, Math.max(0, maxLength - 1)) + "...";
     }
 
     private Button smallButton(String label) {
         Button button = new Button(this);
         button.setText(label);
-        button.setTextSize(12);
+        button.setTextColor(getColor(R.color.overlay_muted));
+        button.setTextSize(13);
         button.setAllCaps(false);
+        button.setBackgroundResource(R.drawable.overlay_button_bg);
+        button.setMinWidth(dp(30));
+        button.setMinHeight(dp(26));
+        button.setMinimumWidth(dp(30));
+        button.setMinimumHeight(dp(26));
+        button.setPadding(0, 0, 0, dp(1));
         return button;
+    }
+
+    private int dp(int value) {
+        return (int) (value * getResources().getDisplayMetrics().density + 0.5f);
     }
 
     private void registerLocal(BroadcastReceiver broadcastReceiver, IntentFilter filter) {

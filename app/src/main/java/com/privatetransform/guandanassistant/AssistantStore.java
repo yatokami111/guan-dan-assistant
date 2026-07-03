@@ -84,7 +84,11 @@ public final class AssistantStore {
     }
 
     public static synchronized String remainingText() {
-        return memory.summarizeRemaining(hand);
+        return memory.summarizeRemainingWithTotal(hand);
+    }
+
+    public static synchronized String remainingDetailText() {
+        return memory.summarizeRemainingDetail(hand);
     }
 
     public static synchronized String lastScanMessage() {

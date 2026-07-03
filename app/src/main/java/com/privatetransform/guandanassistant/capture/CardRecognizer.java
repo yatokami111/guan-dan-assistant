@@ -224,16 +224,21 @@ public final class CardRecognizer {
             if (names == null) return;
             for (String file : names) {
                 if (!file.endsWith(".png")) continue;
+                String name = file.substring(0, file.length() - 4);
+                if (path.endsWith("/cards") && !isTableTemplate(name)) continue;
                 try (InputStream input = assets.open(path + "/" + file)) {
                     Bitmap bitmap = BitmapFactory.decodeStream(input);
                     if (bitmap == null) continue;
-                    String name = file.substring(0, file.length() - 4);
                     target.add(new Template(name, bitmap));
                 }
             }
         } catch (Exception ignored) {
             target.clear();
         }
+    }
+
+    private boolean isTableTemplate(String name) {
+        return !name.contains("_hand");
     }
 
     private List<Card> toCards(List<CardMatch> matches) {

@@ -143,12 +143,10 @@ public final class MainActivity extends Activity {
 
     private void renderStatus() {
         if (resultView == null) return;
-        com.privatetransform.guandanassistant.engine.StrategyAdvisor.Advice advice = AssistantStore.advice();
         resultView.setText("识别状态\n" + (AssistantStore.isWatching() ? "自动识别中" : "未开始")
                 + "\n\n双方级数\n" + AssistantStore.levelSummary()
-                + "\n\n建议\n" + advice.primary
-                + "\n\n已出牌\n" + AssistantStore.playedText()
-                + "\n\n外面余牌估计\n" + AssistantStore.remainingText()
+                + "\n\n全局剩余牌堆\n" + AssistantStore.remainingText()
+                + "\n\n已记录出牌\n" + AssistantStore.playedText()
                 + "\n\n识图状态\n" + AssistantStore.lastScanMessage());
     }
 
