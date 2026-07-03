@@ -28,33 +28,54 @@ import java.nio.ByteBuffer;
 
 public final class ScreenCaptureService extends Service {
     private static final String CHANNEL_ID = "screen_capture";
+    private static final String ACTION_STOP = "com.privatetransform.guandanassistant.STOP_CAPTURE";
     private static final String EXTRA_RESULT_CODE = "result_code";
     private static final String EXTRA_DATA = "data";
+    private static final String EXTRA_CONTINUOUS = "continuous";
+    private static final long FRAME_INTERVAL_MS = 250L;
+
     private MediaProjection projection;
     private ImageReader imageReader;
     private VirtualDisplay virtualDisplay;
+    private boolean continuous;
+    private boolean processedSingleFrame;
+    private long lastProcessMs;
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private CardRecognizer recognizer;
 
-    public static void start(Context context, int resultCode, Intent data) {
+    public static void start(Context context, int resultCode, Intent data, boolean continuous) {
         Intent intent = new Intent(context, ScreenCaptureService.class);
         intent.putExtra(EXTRA_RESULT_CODE, resultCode);
         intent.putExtra(EXTRA_DATA, data);
+        intent.putExtra(EXTRA_CONTINUOUS, continuous);
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent);
         else context.startService(intent);
     }
 
+    public static void stop(Context context) {
+        Intent intent = new Intent(context, ScreenCaptureService.class);
+        intent.setAction(ACTION_STOP);
+        context.startService(intent);
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(31, notification("正在读取屏幕用于识牌"));
+        if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            finish("实时视觉识别已停止");
+            return START_NOT_STICKY;
+        }
+        if (recognizer == null) recognizer = new CardRecognizer(this);
+        startForeground(31, notification("正在实时视觉识别牌面"));
         if (intent == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
+        continuous = intent.getBooleanExtra(EXTRA_CONTINUOUS, false);
         int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
         Intent data = intent.getParcelableExtra(EXTRA_DATA);
         MediaProjectionManager manager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         if (manager == null || data == null) {
-            finish("截图权限数据无效");
+            finish("录屏权限数据无效");
             return START_NOT_STICKY;
         }
         projection = manager.getMediaProjection(resultCode, data);
@@ -65,14 +86,18 @@ public final class ScreenCaptureService extends Service {
         projection.registerCallback(new MediaProjection.Callback() {
             @Override public void onStop() { cleanup(); }
         }, handler);
-        captureOnce();
-        return START_NOT_STICKY;
+        AssistantStore.setWatching(continuous);
+        sendState();
+        startCapture();
+        return continuous ? START_STICKY : START_NOT_STICKY;
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
         cleanup();
+        AssistantStore.setWatching(false);
+        sendState();
     }
 
     @Override
@@ -80,7 +105,7 @@ public final class ScreenCaptureService extends Service {
         return null;
     }
 
-    private void captureOnce() {
+    private void startCapture() {
         DisplayMetrics metrics = new DisplayMetrics();
         WindowManager windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         if (windowManager == null) {
@@ -92,17 +117,7 @@ public final class ScreenCaptureService extends Service {
         imageReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader reader) {
-                Image image = reader.acquireLatestImage();
-                if (image == null) return;
-                try {
-                    Bitmap bitmap = imageToBitmap(image);
-                    CardRecognizer.RecognitionResult result = new CardRecognizer().recognize(bitmap);
-                    AssistantStore.updateScan(result.message, result.cards);
-                    sendBroadcast(new Intent(AssistantStore.ACTION_SCAN_RESULT).setPackage(getPackageName()));
-                    stopSelf();
-                } finally {
-                    image.close();
-                }
+                handleImage(reader);
             }
         }, handler);
         virtualDisplay = projection.createVirtualDisplay(
@@ -115,8 +130,28 @@ public final class ScreenCaptureService extends Service {
                 null,
                 handler);
         handler.postDelayed(new Runnable() {
-            @Override public void run() { finish("截图超时，请重新授权录屏"); }
+            @Override public void run() {
+                if (!continuous && !processedSingleFrame) finish("取帧超时，请重新授权录屏");
+            }
         }, 3000);
+    }
+
+    private void handleImage(ImageReader reader) {
+        Image image = reader.acquireLatestImage();
+        if (image == null) return;
+        try {
+            long now = System.currentTimeMillis();
+            if (continuous && now - lastProcessMs < FRAME_INTERVAL_MS) return;
+            lastProcessMs = now;
+            processedSingleFrame = true;
+            Bitmap bitmap = imageToBitmap(image);
+            CardRecognizer.RecognitionResult result = recognizer.recognize(bitmap);
+            AssistantStore.applyRecognition(result);
+            sendScan();
+            if (!continuous) stopSelf();
+        } finally {
+            image.close();
+        }
     }
 
     private Bitmap imageToBitmap(Image image) {
@@ -132,7 +167,7 @@ public final class ScreenCaptureService extends Service {
 
     private void finish(String message) {
         AssistantStore.updateScan(message, null);
-        sendBroadcast(new Intent(AssistantStore.ACTION_SCAN_RESULT).setPackage(getPackageName()));
+        sendScan();
         stopSelf();
     }
 
@@ -151,10 +186,18 @@ public final class ScreenCaptureService extends Service {
         }
     }
 
+    private void sendScan() {
+        sendBroadcast(new Intent(AssistantStore.ACTION_SCAN_RESULT).setPackage(getPackageName()));
+    }
+
+    private void sendState() {
+        sendBroadcast(new Intent(AssistantStore.ACTION_STATE_CHANGED).setPackage(getPackageName()));
+    }
+
     private Notification notification(String text) {
         NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26 && manager != null) {
-            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "掼蛋识牌", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "掼蛋实时识牌", NotificationManager.IMPORTANCE_LOW);
             manager.createNotificationChannel(channel);
         }
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26

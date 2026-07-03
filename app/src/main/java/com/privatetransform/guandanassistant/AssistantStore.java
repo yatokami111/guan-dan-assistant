@@ -1,5 +1,6 @@
 package com.privatetransform.guandanassistant;
 
+import com.privatetransform.guandanassistant.capture.CardRecognizer;
 import com.privatetransform.guandanassistant.engine.Card;
 import com.privatetransform.guandanassistant.engine.CardMemory;
 import com.privatetransform.guandanassistant.engine.CardParser;
@@ -17,7 +18,10 @@ public final class AssistantStore {
     private static List<Card> hand = new ArrayList<>();
     private static List<Card> lastPlay = new ArrayList<>();
     private static final CardMemory memory = new CardMemory();
-    private static String lastScanMessage = "尚未截图识别";
+    private static String lastScanMessage = "尚未开始实时视觉识别";
+    private static boolean watching = false;
+    private static String lastTableSignature = "";
+    private static long lastTableUpdateMs = 0L;
 
     private AssistantStore() {}
 
@@ -44,6 +48,8 @@ public final class AssistantStore {
     public static synchronized void resetMemory() {
         memory.reset();
         lastPlay.clear();
+        lastTableSignature = "";
+        lastTableUpdateMs = 0L;
     }
 
     public static synchronized List<Card> hand() {
@@ -62,8 +68,21 @@ public final class AssistantStore {
         return memory.summarizePlayed();
     }
 
+    public static synchronized String remainingText() {
+        return memory.summarizeRemaining(hand);
+    }
+
     public static synchronized String lastScanMessage() {
         return lastScanMessage;
+    }
+
+    public static synchronized boolean isWatching() {
+        return watching;
+    }
+
+    public static synchronized void setWatching(boolean enabled) {
+        watching = enabled;
+        lastScanMessage = enabled ? "正在实时视觉识别" : "实时视觉识别已停止";
     }
 
     public static synchronized void updateScan(String message, List<Card> recognizedHand) {
@@ -71,7 +90,39 @@ public final class AssistantStore {
         if (recognizedHand != null && !recognizedHand.isEmpty()) hand = new ArrayList<>(recognizedHand);
     }
 
+    public static synchronized void applyRecognition(CardRecognizer.RecognitionResult result) {
+        if (result == null) return;
+        lastScanMessage = result.message;
+        if (result.levelRank != null && !result.levelRank.trim().isEmpty()) {
+            setLevelRank(result.levelRank);
+        }
+        if (result.cards == null || result.cards.isEmpty()) return;
+        if (result.source == CardRecognizer.SOURCE_HAND) {
+            hand = new ArrayList<>(result.cards);
+            return;
+        }
+        if (result.source == CardRecognizer.SOURCE_TABLE_PLAY) {
+            String signature = signature(result.cards);
+            long now = System.currentTimeMillis();
+            if (!signature.equals(lastTableSignature) || now - lastTableUpdateMs > 3500L) {
+                lastPlay = new ArrayList<>(result.cards);
+                memory.addPlayed(result.cards);
+                lastTableSignature = signature;
+                lastTableUpdateMs = now;
+            }
+        }
+    }
+
     public static synchronized StrategyAdvisor.Advice advice() {
         return new StrategyAdvisor(levelRank).advise(hand, lastPlay, memory);
+    }
+
+    private static String signature(List<Card> cards) {
+        StringBuilder sb = new StringBuilder();
+        for (Card card : cards) {
+            if (sb.length() > 0) sb.append('|');
+            sb.append(card.suit).append(card.rank);
+        }
+        return sb.toString();
     }
 }

@@ -23,7 +23,7 @@ public final class StrategyAdvisor {
         List<PlayAnalysis> candidates = findCandidates(safeHand, targetAnalysis);
         String primary;
         if (safeHand.isEmpty()) {
-            primary = "还没有手牌数据。先点截图识别，或在手牌输入框手动录入。";
+            primary = "还没有手牌数据。先启动实时识牌，或在手牌输入框手动录入。";
         } else if (safeTarget.isEmpty()) {
             primary = leadAdvice(safeHand, candidates);
         } else if (candidates.isEmpty()) {

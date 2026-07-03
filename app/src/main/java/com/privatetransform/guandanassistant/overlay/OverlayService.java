@@ -137,9 +137,12 @@ public final class OverlayService extends Service {
         if (textView == null) return;
         StrategyAdvisor.Advice advice = AssistantStore.advice();
         String content = "掼蛋辅助  打" + AssistantStore.levelRank()
+                + (AssistantStore.isWatching() ? "  实时识别中" : "  未识别")
                 + "\n手牌 " + AssistantStore.hand().size() + " 张"
-                + "\n" + advice.primary
-                + "\n已出 " + AssistantStore.playedText();
+                + "\n建议 " + advice.primary
+                + "\n已出 " + AssistantStore.playedText()
+                + "\n余牌 " + AssistantStore.remainingText()
+                + "\n状态 " + AssistantStore.lastScanMessage();
         textView.setText(content);
     }
 
