@@ -14,7 +14,7 @@ public final class AssistantStore {
     public static final String ACTION_SCAN_RESULT = "com.privatetransform.guandanassistant.SCAN_RESULT";
     public static final String EXTRA_TEXT = "text";
 
-    private static String levelRank = "2";
+    private static String levelRank = "?";
     private static String opponentLevelRank = "?";
     private static List<Card> hand = new ArrayList<>();
     private static List<Card> lastPlay = new ArrayList<>();
@@ -28,11 +28,11 @@ public final class AssistantStore {
     private AssistantStore() {}
 
     public static synchronized void setLevelRank(String rank) {
-        levelRank = rank == null || rank.trim().isEmpty() ? "2" : rank.trim().toUpperCase().replace("T", "10");
+        levelRank = normalizeLevel(rank);
     }
 
     public static synchronized void setOpponentLevelRank(String rank) {
-        opponentLevelRank = rank == null || rank.trim().isEmpty() ? "?" : rank.trim().toUpperCase().replace("T", "10");
+        opponentLevelRank = normalizeLevel(rank);
     }
 
     public static synchronized String levelRank() {
@@ -101,6 +101,10 @@ public final class AssistantStore {
 
     public static synchronized void setWatching(boolean enabled) {
         watching = enabled;
+        if (enabled) {
+            levelRank = "?";
+            opponentLevelRank = "?";
+        }
         lastScanMessage = enabled ? "正在实时视觉识别" : "实时视觉识别已停止";
     }
 
@@ -113,12 +117,8 @@ public final class AssistantStore {
         if (result == null) return;
         scanCount++;
         lastScanMessage = "第" + scanCount + "次检测：" + result.message;
-        if (result.ownLevelRank != null && !result.ownLevelRank.trim().isEmpty()) {
-            setLevelRank(result.ownLevelRank);
-        }
-        if (result.opponentLevelRank != null && !result.opponentLevelRank.trim().isEmpty()) {
-            setOpponentLevelRank(result.opponentLevelRank);
-        }
+        setLevelRank(result.ownLevelRank);
+        setOpponentLevelRank(result.opponentLevelRank);
         if (result.cards == null || result.cards.isEmpty()) return;
         if (result.source == CardRecognizer.SOURCE_HAND) {
             hand = new ArrayList<>(result.cards);
@@ -131,7 +131,8 @@ public final class AssistantStore {
                 memory.addPlayed(result.cards);
                 lastTableSignature = signature;
                 changeCount++;
-                lastScanMessage = "第" + scanCount + "次检测：桌面牌变化" + changeCount + "次，已记入 " + StrategyAdvisor.labels(result.cards);
+                lastScanMessage = "第" + scanCount + "次检测：" + result.message
+                        + "；变化" + changeCount + "次，记入 " + StrategyAdvisor.labels(result.cards);
             }
         }
     }
@@ -147,5 +148,11 @@ public final class AssistantStore {
             sb.append(card.suit).append(card.rank);
         }
         return sb.toString();
+    }
+
+    private static String normalizeLevel(String rank) {
+        if (rank == null || rank.trim().isEmpty()) return "?";
+        String value = rank.trim().toUpperCase().replace("T", "10");
+        return "?".equals(value) ? "?" : value;
     }
 }

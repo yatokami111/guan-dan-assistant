@@ -81,11 +81,10 @@ public final class OverlayService extends Service {
         textView.setTextSize(10);
         textView.setTypeface(Typeface.DEFAULT_BOLD);
         textView.setIncludeFontPadding(false);
-        textView.setMaxWidth(getResources().getDisplayMetrics().widthPixels);
+        textView.setMaxWidth((int) (getResources().getDisplayMetrics().widthPixels * 0.78f));
         panel.addView(textView, new LinearLayout.LayoutParams(
-                0,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-                1));
+                LinearLayout.LayoutParams.WRAP_CONTENT));
 
         Button close = smallButton("×");
         close.setOnClickListener(new View.OnClickListener() {
@@ -97,14 +96,14 @@ public final class OverlayService extends Service {
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 : WindowManager.LayoutParams.TYPE_PHONE;
         params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 type,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 0;
-        params.y = 0;
+        params.x = dp(10);
+        params.y = dp(10);
         root = panel;
         root.setOnTouchListener(new View.OnTouchListener() {
             @Override
@@ -134,7 +133,8 @@ public final class OverlayService extends Service {
         if (textView == null) return;
         String content = "记牌器  " + AssistantStore.levelSummary()
                 + (AssistantStore.isWatching() ? "  · 识别中" : "  · 未识别")
-                + "\n" + compact(AssistantStore.remainingText(), 132);
+                + "\n" + compact(AssistantStore.remainingText(), 96)
+                + "\n" + compact(AssistantStore.lastScanMessage(), 110);
         textView.setText(content);
     }
 
